@@ -1,4 +1,4 @@
-module github.com/charmbracelet/bubbletea
+module github.com/Adjective-Object/bubbletea
 
 go 1.13
 
