@@ -128,6 +128,7 @@ func (r *standardRenderer) flush() {
 	out := termenv.NewOutput(buf)
 
 	newLines := strings.Split(r.buf.String(), "\n")
+	printlnMessagesThisFlush := 0
 	numLinesThisFlush := len(newLines)
 	oldLines := strings.Split(r.lastRender, "\n")
 	skipLines := make(map[int]struct{})
@@ -135,6 +136,7 @@ func (r *standardRenderer) flush() {
 
 	// Add any queued messages to this render
 	if flushQueuedMessages {
+		printlnMessagesThisFlush = len(r.queuedMessageLines)
 		newLines = append(r.queuedMessageLines, newLines...)
 		r.queuedMessageLines = []string{}
 	}
@@ -186,6 +188,7 @@ func (r *standardRenderer) flush() {
 			}
 		} else {
 			line := newLines[i]
+			isPrintlnMessage := i < printlnMessagesThisFlush
 
 			// Truncate lines wider than the width of the window to avoid
 			// wrapping, which will mess up rendering. If we don't have the
@@ -194,8 +197,18 @@ func (r *standardRenderer) flush() {
 			// Note that on Windows we only get the width of the window on
 			// program initialization, so after a resize this won't perform
 			// correctly (signal SIGWINCH is not supported on Windows).
+			//
+			// Exception: if this is a println, we _do_ want to allow
+			// wrapping since this scrollback should wrap instead of
+			// truncating
+			//
+			// This shows the whole scrollback message, as well as
+			// allowing modern terminal emulators to recognize filepaths
+			// and urls across line breaks
 			if r.width > 0 {
-				line = truncate.String(line, uint(r.width))
+				if !isPrintlnMessage {
+					line = truncate.String(line, uint(r.width))
+				}
 			}
 
 			_, _ = out.WriteString(line)
