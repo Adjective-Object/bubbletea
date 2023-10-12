@@ -139,6 +139,19 @@ func WithMouseCellMotion() ProgramOption {
 	}
 }
 
+// Activates "normalized mouse positions" mode. This is a special mode that
+// will attempt to normalize the mouse position as reported by the terminal
+// to be relative the the frame the application is being painted in, rather
+// than relative to the terminal window.
+//
+// This is useful if you want to render a frame that is smaller than the
+// full window (e.g. if you want to use mouse events outside altscreen mode)
+func WithNormalizedMousePosition() ProgramOption {
+	return func(p *Program) {
+		p.startupOptions |= withNormalizedMousePosition // clear
+	}
+}
+
 // WithMouseAllMotion starts the program with the mouse enabled in "all motion"
 // mode.
 //

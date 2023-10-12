@@ -577,6 +577,16 @@ func detectOneMsg(b []byte) (w int, msg Msg) {
 		return mouseEventLen, MouseMsg(parseX10MouseEvent(b))
 	}
 
+	// Detect cursor position events
+	// These have a variable length!
+	const minCursorPosEventLen = 6
+	if len(b) >= minCursorPosEventLen && b[0] == '\x1b' && b[1] == '[' {
+		// try peeking a cursor position msg
+		if cursorPosEvent, size := parseCursorPositionEvent(b); size != -1 {
+			return size, cursorPosEvent
+		}
+	}
+
 	// Detect escape sequence and control characters other than NUL,
 	// possibly with an escape character in front to mark the Alt
 	// modifier.

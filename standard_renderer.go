@@ -20,6 +20,11 @@ const (
 	maxFPS     = 120
 )
 
+type vec2 struct {
+	x int
+	y int
+}
+
 // standardRenderer is a framerate-based terminal renderer, updating the view
 // at a given framerate to avoid overloading the terminal emulator.
 //
@@ -35,9 +40,20 @@ type standardRenderer struct {
 	ticker             *time.Ticker
 	done               chan struct{}
 	lastRender         string
-	linesRendered      int
-	useANSICompressor  bool
-	once               sync.Once
+	// position used when normalizing the cursor
+	referenceCursorPosition CursorPositionMsg
+	// if the cursor position needs to be re-queried
+	// after the next render -- this is set whenever
+	// something happens that could cause the
+	// application to move on the screen. For example:
+	//  - the application height changing
+	//  - a message being printed  with a println message
+	//  - the window resizing
+	referenceCursorIsDirty bool
+
+	linesRendered     int
+	useANSICompressor bool
+	once              sync.Once
 
 	// cursor visibility state
 	cursorHidden bool
@@ -251,6 +267,7 @@ func (r *standardRenderer) flush() {
 			}
 		}
 	}
+	r.referenceCursorIsDirty = r.referenceCursorIsDirty || r.linesRendered != numLinesThisFlush
 	r.linesRendered = numLinesThisFlush
 
 	// Make sure the cursor is at the start of the last line to keep rendering
@@ -267,6 +284,11 @@ func (r *standardRenderer) flush() {
 	_, _ = r.out.Write(buf.Bytes())
 	r.lastRender = r.buf.String()
 	r.buf.Reset()
+
+	if r.referenceCursorIsDirty {
+		queryCursorPos(r.out)
+		r.referenceCursorPosition = CursorPositionMsg{}
+	}
 }
 
 // write writes to the internal buffer. The buffer will be outputted via the
@@ -289,6 +311,7 @@ func (r *standardRenderer) write(s string) {
 
 func (r *standardRenderer) repaint() {
 	r.lastRender = ""
+	r.referenceCursorIsDirty = true
 }
 
 func (r *standardRenderer) clearScreen() {
@@ -580,6 +603,21 @@ func (r *standardRenderer) handleMessages(msg Msg) {
 		r.out.Write([]byte(fmt.Sprintf("%s%dS", termenv.CSI, msg.lines)))
 		r.mtx.Unlock()
 
+	case unknownInputByteMsg:
+		if !r.altScreenActive {
+			// log a warning about an unrecognized input byte
+			r.mtx.Lock()
+			r.queuedMessageLines = append(
+				r.queuedMessageLines,
+				fmt.Sprintf("std renderer saw unrecognized input sequence! %s", msg))
+			r.repaint()
+			r.mtx.Unlock()
+		}
+
+	case CursorPositionMsg:
+		r.referenceCursorIsDirty = false
+		r.referenceCursorPosition = msg
+
 	case printLineMessage:
 		if !r.altScreenActive {
 			lines := strings.Split(msg.messageBody, "\n")
@@ -589,6 +627,14 @@ func (r *standardRenderer) handleMessages(msg Msg) {
 			r.mtx.Unlock()
 		}
 	}
+}
+
+func (r *standardRenderer) normalizeMouseMsg(ev MouseMsg) MouseMsg {
+	// lock on the reference cursor position
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+	ev.Y -= r.referenceCursorPosition.Y
+	return ev
 }
 
 // HIGH-PERFORMANCE RENDERING STUFF
@@ -725,5 +771,12 @@ func Printf(template string, args ...interface{}) Cmd {
 		return printLineMessage{
 			messageBody: fmt.Sprintf(template, args...),
 		}
+	}
+}
+
+func queryCursorPos(out *termenv.Output) {
+	tty := out.TTY()
+	if tty != nil {
+		tty.Write([]byte("\033[6n"))
 	}
 }

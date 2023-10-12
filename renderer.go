@@ -56,6 +56,8 @@ type renderer interface {
 
 	// DisableMouseAllMotion disables All Motion mouse tracking.
 	disableMouseAllMotion()
+
+	normalizeMouseMsg(MouseMsg) MouseMsg
 }
 
 // repaintMsg forces a full repaint.

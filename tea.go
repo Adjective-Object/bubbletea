@@ -91,6 +91,7 @@ const (
 	withMousePress
 	withMouseCellMotion
 	withMouseAllMotion
+	withNormalizedMousePosition
 	withANSICompressor
 	withoutSignalHandler
 
@@ -304,6 +305,8 @@ func (p *Program) handleCommands(cmds chan Cmd) chan struct{} {
 // eventLoop is the central message loop. It receives and handles the default
 // Bubble Tea messages, update the model and triggers redraws.
 func (p *Program) eventLoop(model Model, cmds chan Cmd) (Model, error) {
+	// if mouse events should be normalized against the renderer
+	shouldNormalizeMouseEvents := p.startupOptions&withNormalizedMousePosition != 0
 	for {
 		select {
 		case <-p.ctx.Done():
@@ -388,6 +391,12 @@ func (p *Program) eventLoop(model Model, cmds chan Cmd) (Model, error) {
 						p.Send(msg)
 					}
 				}()
+
+			case MouseMsg:
+				// normalize mouse messages if the renderer supports that
+				if shouldNormalizeMouseEvents {
+					msg = p.renderer.normalizeMouseMsg(msg)
+				}
 			}
 
 			// Process internal messages for the renderer.
