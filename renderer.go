@@ -36,6 +36,12 @@ type renderer interface {
 	// Hide the cursor.
 	hideCursor()
 
+	// enableMouseCellMotion enables mouse click events if a mouse button is pressed
+	enableMousePress()
+
+	// DisableMouseCellMotion disables Mouse Press tracking.
+	disableMousePress()
+
 	// enableMouseCellMotion enables mouse click, release, wheel and motion
 	// events if a mouse button is pressed (i.e., drag events).
 	enableMouseCellMotion()

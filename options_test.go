@@ -92,6 +92,35 @@ func TestOptions(t *testing.T) {
 			exercise(t, WithoutSignalHandler(), withoutSignalHandler)
 		})
 
+		t.Run("mouse press motion", func(t *testing.T) {
+			p := NewProgram(nil, WithMousePress())
+			if !p.startupOptions.has(withMousePress) {
+				t.Errorf("expected startup options have %v, got %v", withMousePress, p.startupOptions)
+			}
+
+			t.Run("compose with mouse cell motion", func(t *testing.T) {
+				p := NewProgram(nil, WithMousePress(), WithMouseCellMotion())
+				if !p.startupOptions.has(withMouseCellMotion) {
+					t.Errorf("expected startup options have %v, got %v", withMouseCellMotion, p.startupOptions)
+				}
+
+				if p.startupOptions.has(withMousePress) {
+					t.Errorf("expected startup options have %v, got %v", withMouseCellMotion, p.startupOptions)
+				}
+			})
+
+			t.Run("compose with mouse all motion", func(t *testing.T) {
+				p := NewProgram(nil, WithMousePress(), WithMouseAllMotion())
+				if !p.startupOptions.has(withMouseAllMotion) {
+					t.Errorf("expected startup options have %v, got %v", withMouseAllMotion, p.startupOptions)
+				}
+
+				if p.startupOptions.has(withMousePress) {
+					t.Errorf("expected startup options have %v, got %v", withMouseAllMotion, p.startupOptions)
+				}
+			})
+		})
+
 		t.Run("mouse cell motion", func(t *testing.T) {
 			p := NewProgram(nil, WithMouseAllMotion(), WithMouseCellMotion())
 			if !p.startupOptions.has(withMouseCellMotion) {

@@ -58,9 +58,24 @@ type exitAltScreenMsg struct{}
 //
 // Because commands run asynchronously, this command should not be used in your
 // model's Init function. Use the WithMouseCellMotion ProgramOption instead.
+func EnableMousePress() Msg {
+	return enableMousePressMsg{}
+}
+
+// EnableMouseCellMotion is a special command that enables mouse click,
+// release, and wheel events. Mouse movement events are also captured if
+// a mouse button is pressed (i.e., drag events).
+//
+// Because commands run asynchronously, this command should not be used in your
+// model's Init function. Use the WithMouseCellMotion ProgramOption instead.
 func EnableMouseCellMotion() Msg {
 	return enableMouseCellMotionMsg{}
 }
+
+// enableMousePressMsg is a special command that signals to start
+// listening for "mouse press" type events (ESC[?1002l). To send an
+// enableMousePressMsg, use the EnableMousePress command.
+type enableMousePressMsg struct{}
 
 // enableMouseCellMotionMsg is a special command that signals to start
 // listening for "cell motion" type mouse events (ESC[?1002l). To send an

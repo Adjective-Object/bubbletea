@@ -379,6 +379,20 @@ func (r *standardRenderer) hideCursor() {
 	r.out.HideCursor()
 }
 
+func (r *standardRenderer) enableMousePress() {
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+
+	r.out.EnableMousePress()
+}
+
+func (r *standardRenderer) disableMousePress() {
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+
+	r.out.DisableMousePress()
+}
+
 func (r *standardRenderer) enableMouseCellMotion() {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
@@ -554,6 +568,18 @@ func (r *standardRenderer) handleMessages(msg Msg) {
 	case scrollDownMsg:
 		r.insertBottom(msg.lines, msg.topBoundary, msg.bottomBoundary)
 
+	case scrollUpRawMsg:
+		// see: https://www.xfree86.org/current/ctlseqs.html
+		r.mtx.Lock()
+		r.out.Write([]byte(fmt.Sprintf("%s%dT", termenv.CSI, msg.lines)))
+		r.mtx.Unlock()
+
+	case scrollDownRawMsg:
+		// see: https://www.xfree86.org/current/ctlseqs.html
+		r.mtx.Lock()
+		r.out.Write([]byte(fmt.Sprintf("%s%dS", termenv.CSI, msg.lines)))
+		r.mtx.Unlock()
+
 	case printLineMessage:
 		if !r.altScreenActive {
 			lines := strings.Split(msg.messageBody, "\n")
@@ -619,6 +645,19 @@ func ScrollUp(newLines []string, topBoundary, bottomBoundary int) Cmd {
 	}
 }
 
+type scrollUpRawMsg struct{ lines int }
+
+// ScrollUpRaw scrolls the native terminal buffer up one line.
+//
+// For use when the native scrolling mechanisms of the terminal
+// emulator are disabled (e.g. when the program was launched with WithMouseAll())
+// but you still want to be able to somehow scroll the terminal.
+func ScrollUpRaw(lines int) Cmd {
+	return func() Msg {
+		return scrollUpRawMsg{lines}
+	}
+}
+
 type scrollDownMsg struct {
 	lines          []string
 	topBoundary    int
@@ -637,6 +676,19 @@ func ScrollDown(newLines []string, topBoundary, bottomBoundary int) Cmd {
 			topBoundary:    topBoundary,
 			bottomBoundary: bottomBoundary,
 		}
+	}
+}
+
+type scrollDownRawMsg struct{ lines int }
+
+// ScrollUpRaw scrolls the native terminal buffer up one line.
+//
+// For use when the native scrolling mechanisms of the terminal
+// emulator are disabled (e.g. when the program was launched with WithMouseAll())
+// but you still want to be able to somehow scroll the terminal.
+func ScrollDownRaw(lines int) Cmd {
+	return func() Msg {
+		return scrollDownRawMsg{lines}
 	}
 }
 

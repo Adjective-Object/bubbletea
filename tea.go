@@ -88,6 +88,7 @@ func (s startupOptions) has(option startupOptions) bool {
 
 const (
 	withAltScreen startupOptions = 1 << iota
+	withMousePress
 	withMouseCellMotion
 	withMouseAllMotion
 	withANSICompressor
@@ -483,7 +484,9 @@ func (p *Program) Run() (Model, error) {
 	if p.startupOptions&withAltScreen != 0 {
 		p.renderer.enterAltScreen()
 	}
-	if p.startupOptions&withMouseCellMotion != 0 {
+	if p.startupOptions&withMousePress != 0 {
+		p.renderer.enableMousePress()
+	} else if p.startupOptions&withMouseCellMotion != 0 {
 		p.renderer.enableMouseCellMotion()
 	} else if p.startupOptions&withMouseAllMotion != 0 {
 		p.renderer.enableMouseAllMotion()

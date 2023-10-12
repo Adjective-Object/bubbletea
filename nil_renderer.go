@@ -13,6 +13,8 @@ func (n nilRenderer) enterAltScreen()         {}
 func (n nilRenderer) exitAltScreen()          {}
 func (n nilRenderer) showCursor()             {}
 func (n nilRenderer) hideCursor()             {}
+func (n nilRenderer) enableMousePress()       {}
+func (n nilRenderer) disableMousePress()      {}
 func (n nilRenderer) enableMouseCellMotion()  {}
 func (n nilRenderer) disableMouseCellMotion() {}
 func (n nilRenderer) enableMouseAllMotion()   {}

@@ -100,6 +100,25 @@ func WithAltScreen() ProgramOption {
 	}
 }
 
+// WithMousePress starts the program with the mouse enabled in "mouse press
+// motion" mode.
+//
+// Mouse press enables mouse click and release events. Mouse movement is
+// not captured
+//
+// To enable mouse cell motion once the program has already started running use
+// the EnableMouseCellMotion command. To disable the mouse when the program is
+// running use the DisableMouse command.
+//
+// The mouse will be automatically disabled when the program exits.
+func WithMousePress() ProgramOption {
+	return func(p *Program) {
+		p.startupOptions |= withMousePress       // set
+		p.startupOptions &^= withMouseCellMotion // clear
+		p.startupOptions &^= withMouseAllMotion  // clear
+	}
+}
+
 // WithMouseCellMotion starts the program with the mouse enabled in "cell
 // motion" mode.
 //
@@ -115,6 +134,7 @@ func WithAltScreen() ProgramOption {
 func WithMouseCellMotion() ProgramOption {
 	return func(p *Program) {
 		p.startupOptions |= withMouseCellMotion // set
+		p.startupOptions &^= withMousePress     // clear
 		p.startupOptions &^= withMouseAllMotion // clear
 	}
 }
@@ -137,6 +157,7 @@ func WithMouseCellMotion() ProgramOption {
 func WithMouseAllMotion() ProgramOption {
 	return func(p *Program) {
 		p.startupOptions |= withMouseAllMotion   // set
+		p.startupOptions &^= withMousePress      // clear
 		p.startupOptions &^= withMouseCellMotion // clear
 	}
 }

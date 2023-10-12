@@ -17,6 +17,7 @@ func TestNilRenderer(t *testing.T) {
 	r.clearScreen()
 	r.showCursor()
 	r.hideCursor()
+	r.enableMousePress()
 	r.enableMouseCellMotion()
 	r.disableMouseCellMotion()
 	r.enableMouseAllMotion()
