@@ -43,11 +43,11 @@ func parseCursorPositionEvent(buf []byte) (CursorPositionMsg, int) {
 
 	// parse the numbers
 	var err error
-	ev.X, err = strconv.Atoi(string(buf[2:sepIdx]))
+	ev.Y, err = strconv.Atoi(string(buf[2:sepIdx]))
 	if err != nil {
 		return ev, -1
 	}
-	ev.Y, err = strconv.Atoi(string(buf[sepIdx+1 : endIdx]))
+	ev.X, err = strconv.Atoi(string(buf[sepIdx+1 : endIdx]))
 	if err != nil {
 		return ev, -1
 	}

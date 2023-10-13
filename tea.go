@@ -306,7 +306,7 @@ func (p *Program) handleCommands(cmds chan Cmd) chan struct{} {
 // Bubble Tea messages, update the model and triggers redraws.
 func (p *Program) eventLoop(model Model, cmds chan Cmd) (Model, error) {
 	// if mouse events should be normalized against the renderer
-	shouldNormalizeMouseEvents := p.startupOptions&withNormalizedMousePosition != 0
+	shouldNormalizeMouseEvents := p.startupOptions.has(withNormalizedMousePosition)
 	for {
 		select {
 		case <-p.ctx.Done():
@@ -325,7 +325,7 @@ func (p *Program) eventLoop(model Model, cmds chan Cmd) (Model, error) {
 			}
 
 			// Handle special internal messages.
-			switch msg := msg.(type) {
+			switch m := msg.(type) {
 			case QuitMsg:
 				return model, nil
 
@@ -356,10 +356,10 @@ func (p *Program) eventLoop(model Model, cmds chan Cmd) (Model, error) {
 
 			case execMsg:
 				// NB: this blocks.
-				p.exec(msg.cmd, msg.fn)
+				p.exec(m.cmd, m.fn)
 
 			case BatchMsg:
-				for _, cmd := range msg {
+				for _, cmd := range m {
 					cmds <- cmd
 				}
 				continue
@@ -367,7 +367,7 @@ func (p *Program) eventLoop(model Model, cmds chan Cmd) (Model, error) {
 			case sequenceMsg:
 				go func() {
 					// Execute commands one at a time, in order.
-					for _, cmd := range msg {
+					for _, cmd := range m {
 						if cmd == nil {
 							continue
 						}
@@ -395,7 +395,7 @@ func (p *Program) eventLoop(model Model, cmds chan Cmd) (Model, error) {
 			case MouseMsg:
 				// normalize mouse messages if the renderer supports that
 				if shouldNormalizeMouseEvents {
-					msg = p.renderer.normalizeMouseMsg(msg)
+					msg = p.renderer.normalizeMouseMsg(m)
 				}
 			}
 
@@ -480,7 +480,11 @@ func (p *Program) Run() (Model, error) {
 
 	// If no renderer is set use the standard one.
 	if p.renderer == nil {
-		p.renderer = newRenderer(p.output, p.startupOptions.has(withANSICompressor), p.fps)
+		p.renderer = newRenderer(
+			p.output,
+			p.startupOptions.has(withANSICompressor),
+			p.startupOptions.has(withNormalizedMousePosition),
+			p.fps)
 	}
 
 	// Check if output is a TTY before entering raw mode, hiding the cursor and
@@ -490,14 +494,14 @@ func (p *Program) Run() (Model, error) {
 	}
 
 	// Honor program startup options.
-	if p.startupOptions&withAltScreen != 0 {
+	if p.startupOptions.has(withAltScreen) {
 		p.renderer.enterAltScreen()
 	}
-	if p.startupOptions&withMousePress != 0 {
+	if p.startupOptions.has(withMousePress) {
 		p.renderer.enableMousePress()
-	} else if p.startupOptions&withMouseCellMotion != 0 {
+	} else if p.startupOptions.has(withMouseCellMotion) {
 		p.renderer.enableMouseCellMotion()
-	} else if p.startupOptions&withMouseAllMotion != 0 {
+	} else if p.startupOptions.has(withMouseAllMotion) {
 		p.renderer.enableMouseAllMotion()
 	}
 

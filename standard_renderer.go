@@ -39,7 +39,12 @@ type standardRenderer struct {
 	framerate          time.Duration
 	ticker             *time.Ticker
 	done               chan struct{}
-	lastRender         string
+	// channel closed when the ticker loop has finished exiting
+	tickerDone chan struct{}
+	lastRender string
+	// whether to track a reference cursor position for use
+	// in normalizeMouseMsg
+	trackCursorPosition bool
 	// position used when normalizing the cursor
 	referenceCursorPosition CursorPositionMsg
 	// if the cursor position needs to be re-queried
@@ -71,7 +76,7 @@ type standardRenderer struct {
 
 // newRenderer creates a new renderer. Normally you'll want to initialize it
 // with os.Stdout as the first argument.
-func newRenderer(out *termenv.Output, useANSICompressor bool, fps int) renderer {
+func newRenderer(out *termenv.Output, useANSICompressor bool, trackCursorPosition bool, fps int) renderer {
 	if fps < 1 {
 		fps = defaultFPS
 	} else if fps > maxFPS {
@@ -81,6 +86,7 @@ func newRenderer(out *termenv.Output, useANSICompressor bool, fps int) renderer 
 		out:                out,
 		mtx:                &sync.Mutex{},
 		done:               make(chan struct{}),
+		tickerDone:         make(chan struct{}),
 		framerate:          time.Second / time.Duration(fps),
 		useANSICompressor:  useANSICompressor,
 		queuedMessageLines: []string{},
@@ -112,11 +118,19 @@ func (r *standardRenderer) start() {
 func (r *standardRenderer) stop() {
 	// Stop the renderer before acquiring the mutex to avoid a deadlock.
 	r.once.Do(func() {
-		r.done <- struct{}{}
+		close(r.done)
+		// wait for the ticker loop to acknowledge the exit
+		//
+		// otherwise, there is a race condition during exiting where
+		// the loop may try to query for the cursor position after
+		// the renderer has been stopped
+		<-r.tickerDone
 	})
 
 	// flush locks the mutex
-	r.flush()
+	r.flush(
+		true, // isShutdown
+	)
 
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
@@ -149,16 +163,19 @@ func (r *standardRenderer) listen() {
 		select {
 		case <-r.done:
 			r.ticker.Stop()
+			close(r.tickerDone)
 			return
 
 		case <-r.ticker.C:
-			r.flush()
+			r.flush(
+				false, // isShutdown
+			)
 		}
 	}
 }
 
 // flush renders the buffer.
-func (r *standardRenderer) flush() {
+func (r *standardRenderer) flush(isShutdown bool) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
@@ -285,7 +302,7 @@ func (r *standardRenderer) flush() {
 	r.lastRender = r.buf.String()
 	r.buf.Reset()
 
-	if r.referenceCursorIsDirty {
+	if r.trackCursorPosition && r.referenceCursorIsDirty && !isShutdown {
 		queryCursorPos(r.out)
 		r.referenceCursorPosition = CursorPositionMsg{}
 	}
@@ -615,8 +632,10 @@ func (r *standardRenderer) handleMessages(msg Msg) {
 		}
 
 	case CursorPositionMsg:
+		r.mtx.Lock()
 		r.referenceCursorIsDirty = false
 		r.referenceCursorPosition = msg
+		r.mtx.Unlock()
 
 	case printLineMessage:
 		if !r.altScreenActive {
@@ -633,7 +652,7 @@ func (r *standardRenderer) normalizeMouseMsg(ev MouseMsg) MouseMsg {
 	// lock on the reference cursor position
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
-	ev.Y -= r.referenceCursorPosition.Y
+	ev.Y -= r.referenceCursorPosition.Y - r.linesRendered
 	return ev
 }
 
