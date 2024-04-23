@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +55,13 @@ type standardRenderer struct {
 
 	// lines explicitly set not to render
 	ignoreLines map[int]struct{}
+
+	// buffer of which lines to skip in the current render,
+	// which is reused between renders as a performance optimization
+	skipLines []bool
+
+	// tracks the position of the cursor in the write-buffer over time
+	renderingHead int
 }
 
 // newRenderer creates a new renderer. Normally you'll want to initialize it
@@ -170,48 +178,73 @@ func (r *standardRenderer) flush() {
 
 	numLinesThisFlush := len(newLines)
 	oldLines := strings.Split(r.lastRender, "\n")
-	skipLines := make(map[int]struct{})
+	// reset the skipLines buffer to the correct size
+	if len(r.skipLines) < numLinesThisFlush {
+		if cap(r.skipLines) < numLinesThisFlush {
+			r.skipLines = make([]bool, numLinesThisFlush)
+		} else {
+			// You can safely resize a slice to a larger capcity of its length
+			// See: https://go.dev/tour/moretypes/11
+			r.skipLines = r.skipLines[:numLinesThisFlush]
+		}
+	}
+	for i := 0; i < len(r.skipLines); i++ {
+		r.skipLines[i] = false
+	}
+
 	flushQueuedMessages := len(r.queuedMessageLines) > 0 && !r.altScreenActive
 
-	// Clear any lines we painted in the last render.
-	if r.linesRendered > 0 {
+	// TODO remove printf
+	fmt.Fprintln(os.Stderr, "--------- start new render:", "r.linesRendered=", r.linesRendered, "flushQueuedMessages=", flushQueuedMessages, "r.renderingHead=", r.renderingHead, "numLinesThisFlush=", numLinesThisFlush, "---------")
+
+	// Find all the lines we want to skip
+	var highestRenderedLine = 0;
+	if r.linesRendered > 0 && !flushQueuedMessages {
 		for i := r.linesRendered - 1; i > 0; i-- {
-			// if we are clearing queued messages, we want to clear all lines, since
-			// printing messages allows for native terminal word-wrap, we
-			// don't have control over the queued lines
-			if flushQueuedMessages {
-				out.ClearLine()
-			} else if (len(newLines) <= len(oldLines)) && (len(newLines) > i && len(oldLines) > i) && (newLines[i] == oldLines[i]) {
+			if (len(newLines) > i && len(oldLines) > i) && (newLines[i] == oldLines[i]) {
 				// If the number of lines we want to render hasn't increased and
 				// new line is the same as the old line we can skip rendering for
 				// this line as a performance optimization.
-				skipLines[i] = struct{}{}
-			} else if _, exists := r.ignoreLines[i]; !exists {
-				out.ClearLine()
+				r.skipLines[i] = true
+			} else if _, shouldIgnore := r.ignoreLines[i]; shouldIgnore {
+				r.skipLines[i] = true
+			} else {
+				highestRenderedLine = i
 			}
-
-			out.CursorUp(1)
-		}
-
-		if _, exists := r.ignoreLines[0]; !exists {
-			// We need to return to the start of the line here to properly
-			// erase it. Going back the entire width of the terminal will
-			// usually be farther than we need to go, but terminal emulators
-			// will stop the cursor at the start of the line as a rule.
-			//
-			// We use this sequence in particular because it's part of the ANSI
-			// standard (whereas others are proprietary to, say, VT100/VT52).
-			// If cursor previous line (ESC[ + <n> + F) were better supported
-			// we could use that above to eliminate this step.
-			out.CursorBack(r.width)
-			out.ClearLine()
 		}
 	}
+	// Actually erase the lines we want to skip, tracking the relative position of
+	// the cursor in the write-buffer over time to avoid unnecessary cursor movement.
+	//
+	// This is because unecessary cursor movement can cause "flickering" in the
+	// terminal, where the cursor jumps around as the terminal is being updated.
+	fmt.Fprintln(os.Stderr, "skipLines", r.skipLines)
+	fmt.Fprintln(os.Stderr, "highestReneredLine", r.skipLines)
+	fmt.Fprintln(os.Stderr, "skipping")
 
-	// Merge the set of lines we're skipping as a rendering optimization with
-	// the set of lines we've explicitly asked the renderer to ignore.
-	for k, v := range r.ignoreLines {
-		skipLines[k] = v
+	// If we have rendered anyting previously, we need to clear the lines that
+	// were not skipped
+	if r.linesRendered > 0 {
+		// The rendering head is the index of the cursor in the current render.
+		// If we have more lines to render, we need to move the cursor down to
+		// the line we want to replace.
+		if r.renderingHead < highestRenderedLine {
+			fmt.Fprintln(os.Stderr, "  jump down to line", highestRenderedLine, "delta=", highestRenderedLine-r.renderingHead)
+			out.CursorDown(highestRenderedLine - r.renderingHead)
+		}
+		r.renderingHead = highestRenderedLine
+
+		// iterate backwards, starting from the last rendered line
+		for i := highestRenderedLine; i >= 0; i-- {
+			if !r.skipLines[i] {
+				// jump to this position and clear it
+				fmt.Fprintln(os.Stderr, "  up + clear to line ", i, "delta", r.renderingHead-i, "newLine", newLines[i])
+				out.CursorUp(r.renderingHead - i)
+				out.CursorBack(r.width)
+				out.ClearLine()
+				r.renderingHead = i
+			}
+		}
 	}
 
 	if flushQueuedMessages {
@@ -224,14 +257,10 @@ func (r *standardRenderer) flush() {
 		r.queuedMessageLines = []string{}
 	}
 
-	// Paint new lines
-	for i := 0; i < len(newLines); i++ {
-		if _, skip := skipLines[i]; skip {
-			// Unless this is the last line, move the cursor down.
-			if i < len(newLines)-1 {
-				out.CursorDown(1)
-			}
-		} else {
+	// Paint new lines, starting at the current position of the rendering head
+	fmt.Fprintln(os.Stderr, "painting")
+	for i := r.renderingHead; i < numLinesThisFlush; i++ {
+		if skip := r.skipLines[i]; !skip {
 			line := newLines[i]
 
 			// Truncate lines wider than the width of the window to avoid
@@ -245,10 +274,18 @@ func (r *standardRenderer) flush() {
 				line = truncate.String(line, uint(r.width))
 			}
 
-			_, _ = out.WriteString(line)
+			// move the rendering head down to the current line
+			if r.renderingHead != i {
+				fmt.Fprintln(os.Stderr, "skip down:", "renderingHead", r.renderingHead, "i", i, "down:", i-r.renderingHead)
+				out.CursorDown(i - r.renderingHead)
+				r.renderingHead = i
+			}
 
-			if i < len(newLines)-1 {
+			fmt.Fprintln(os.Stderr, "render:", "renderingHead", r.renderingHead, "i", i, " |||", line)
+			_, _ = out.WriteString(line)
+			if i < numLinesThisFlush-1 {
 				_, _ = out.WriteString("\r\n")
+				r.renderingHead++
 			}
 		}
 	}
