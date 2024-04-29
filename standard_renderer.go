@@ -178,14 +178,21 @@ func (r *standardRenderer) flush() {
 
 	numLinesThisFlush := len(newLines)
 	oldLines := strings.Split(r.lastRender, "\n")
+
+	// get capacity for the skipLines buffer
+	skipCap := r.linesRendered
+	if numLinesThisFlush > skipCap {
+		skipCap = numLinesThisFlush
+	}
+
 	// reset the skipLines buffer to the correct size
-	if len(r.skipLines) < numLinesThisFlush {
-		if cap(r.skipLines) < numLinesThisFlush {
-			r.skipLines = make([]bool, numLinesThisFlush)
+	if len(r.skipLines) < skipCap {
+		if cap(r.skipLines) < skipCap {
+			r.skipLines = make([]bool, skipCap)
 		} else {
 			// You can safely resize a slice to a larger capcity of its length
 			// See: https://go.dev/tour/moretypes/11
-			r.skipLines = r.skipLines[:numLinesThisFlush]
+			r.skipLines = r.skipLines[:skipCap]
 		}
 	}
 	for i := 0; i < len(r.skipLines); i++ {
@@ -198,9 +205,12 @@ func (r *standardRenderer) flush() {
 	fmt.Fprintln(os.Stderr, "--------- start new render:", "r.linesRendered=", r.linesRendered, "flushQueuedMessages=", flushQueuedMessages, "r.renderingHead=", r.renderingHead, "numLinesThisFlush=", numLinesThisFlush, "---------")
 
 	// Find all the lines we want to skip
-	var highestRenderedLine = 0;
-	if r.linesRendered > 0 && !flushQueuedMessages {
-		for i := r.linesRendered - 1; i > 0; i-- {
+	var lowestLineToClear = 0
+	if flushQueuedMessages {
+		// if wer'e flushing messages, we need to clear all lines
+		lowestLineToClear = r.linesRendered - 1
+	} else if r.linesRendered > 0 {
+		for i := 0; i < r.linesRendered; i++ {
 			if (len(newLines) > i && len(oldLines) > i) && (newLines[i] == oldLines[i]) {
 				// If the number of lines we want to render hasn't increased and
 				// new line is the same as the old line we can skip rendering for
@@ -209,7 +219,7 @@ func (r *standardRenderer) flush() {
 			} else if _, shouldIgnore := r.ignoreLines[i]; shouldIgnore {
 				r.skipLines[i] = true
 			} else {
-				highestRenderedLine = i
+				lowestLineToClear = i
 			}
 		}
 	}
@@ -219,7 +229,7 @@ func (r *standardRenderer) flush() {
 	// This is because unecessary cursor movement can cause "flickering" in the
 	// terminal, where the cursor jumps around as the terminal is being updated.
 	fmt.Fprintln(os.Stderr, "skipLines", r.skipLines)
-	fmt.Fprintln(os.Stderr, "highestReneredLine", r.skipLines)
+	fmt.Fprintln(os.Stderr, "highestRenderedLine", lowestLineToClear)
 	fmt.Fprintln(os.Stderr, "skipping")
 
 	// If we have rendered anyting previously, we need to clear the lines that
@@ -228,19 +238,20 @@ func (r *standardRenderer) flush() {
 		// The rendering head is the index of the cursor in the current render.
 		// If we have more lines to render, we need to move the cursor down to
 		// the line we want to replace.
-		if r.renderingHead < highestRenderedLine {
-			fmt.Fprintln(os.Stderr, "  jump down to line", highestRenderedLine, "delta=", highestRenderedLine-r.renderingHead)
-			out.CursorDown(highestRenderedLine - r.renderingHead)
+		if r.renderingHead < lowestLineToClear {
+			fmt.Fprintln(os.Stderr, "  jump down to line", lowestLineToClear, "delta=", lowestLineToClear-r.renderingHead)
+			out.CursorDown(lowestLineToClear - r.renderingHead)
 		}
-		r.renderingHead = highestRenderedLine
+		r.renderingHead = lowestLineToClear
 
 		// iterate backwards, starting from the last rendered line
-		for i := highestRenderedLine; i >= 0; i-- {
+		for i := lowestLineToClear; i >= 0; i-- {
 			if !r.skipLines[i] {
 				// jump to this position and clear it
 				fmt.Fprintln(os.Stderr, "  up + clear to line ", i, "delta", r.renderingHead-i, "newLine", newLines[i])
-				out.CursorUp(r.renderingHead - i)
-				out.CursorBack(r.width)
+				if r.renderingHead != i {
+					out.CursorUp(r.renderingHead - i)
+				}
 				out.ClearLine()
 				r.renderingHead = i
 			}
@@ -254,7 +265,7 @@ func (r *standardRenderer) flush() {
 			_, _ = out.WriteString("\r\n")
 		}
 		// clear the queued message lines
-		r.queuedMessageLines = []string{}
+		r.queuedMessageLines = r.queuedMessageLines[:0]
 	}
 
 	// Paint new lines, starting at the current position of the rendering head
@@ -277,15 +288,19 @@ func (r *standardRenderer) flush() {
 			// move the rendering head down to the current line
 			if r.renderingHead != i {
 				fmt.Fprintln(os.Stderr, "skip down:", "renderingHead", r.renderingHead, "i", i, "down:", i-r.renderingHead)
-				out.CursorDown(i - r.renderingHead)
+				delta := i - r.renderingHead
+				if delta == 1 {
+					out.Write([]byte("\n"))
+				} else {
+					out.CursorDown(delta)
+				}
 				r.renderingHead = i
 			}
 
 			fmt.Fprintln(os.Stderr, "render:", "renderingHead", r.renderingHead, "i", i, " |||", line)
 			_, _ = out.WriteString(line)
 			if i < numLinesThisFlush-1 {
-				_, _ = out.WriteString("\r\n")
-				r.renderingHead++
+				_, _ = out.WriteString("\r")
 			}
 		}
 	}

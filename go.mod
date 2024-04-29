@@ -22,3 +22,7 @@ require (
 	github.com/rivo/uniseg v0.4.6 // indirect
 	golang.org/x/text v0.3.8 // indirect
 )
+
+replace (
+	github.com/muesli/reflow => /workspaces/reflow
+)
