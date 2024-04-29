@@ -34,6 +34,7 @@ func compareBuffers(
 	actual []byte,
 	expected []byte,
 ) {
+	t.Helper()
 	if len(actual) != len(expected) || !bytes.Equal(actual, expected) {
 		m := len(actual)
 		if x := len(expected); x < m {
@@ -384,12 +385,12 @@ func TestFlush(t *testing.T) {
 		origRender := "Line 1\n" +
 			"Line 2\n" +
 			"Line 3\n" +
-			"Line 4\n"
+			"Line 4"
 
 		nextRender := "Line 1\n" +
 			"Line 2\n" +
 			"Line Three\n" +
-			"Line Four\n"
+			"Line Four"
 
 		buffer := bytes.Buffer{}
 		r := standardRenderer{
@@ -433,7 +434,7 @@ func TestFlush(t *testing.T) {
 		eO.WriteString("\n")
 		eO.WriteString("Line Three\r")
 		eO.WriteString("\n")
-		eO.WriteString("Line Four\r")
+		eO.WriteString("Line Four")
 		// reset cursor to back
 		eO.CursorBack(20)
 
@@ -448,8 +449,8 @@ func TestFlush(t *testing.T) {
 				r.lastRender)
 		}
 
-		if r.renderingHead != 2 {
-			t.Errorf("expected renderingHead to be 0, got %d", r.renderingHead)
+		if r.renderingHead != 3 {
+			t.Errorf("expected renderingHead to be 3, got %d", r.renderingHead)
 		}
 	})
 }
