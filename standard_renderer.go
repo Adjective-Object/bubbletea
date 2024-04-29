@@ -35,6 +35,7 @@ type standardRenderer struct {
 	ticker             *time.Ticker
 	done               chan struct{}
 	lastRender         string
+	lastRenderLines    []string
 	linesRendered      int
 	useANSICompressor  bool
 	once               sync.Once
@@ -178,14 +179,141 @@ func (r *standardRenderer) flush() {
 	}
 
 	numLinesThisFlush := len(newLines)
-	oldLines := strings.Split(r.lastRender, "\n")
 
 	// get capacity for the skipLines buffer
-	skipCap := r.linesRendered
-	if numLinesThisFlush > skipCap {
-		skipCap = numLinesThisFlush
+	if flushQueuedMessages {
+		// reset the cursor to the top
+		if r.renderingHead != 0 {
+			r.moveRenderingHead(0, out)
+		}
+		// Dump the lines we've queued up for printing
+		for _, line := range r.queuedMessageLines {
+			out.ClearLine()
+			out.WriteString(line)
+			out.WriteString("\r\n")
+		}
+		// clear the queued message lines
+		r.queuedMessageLines = r.queuedMessageLines[:0]
+
+		// paint all lines
+		for i, line := range newLines {
+			out.ClearLine()
+			out.WriteString(line)
+			if i < numLinesThisFlush-1 {
+				_, _ = out.WriteString("\r\n")
+			}
+		}
+		// set renderingHEad to the btotom of the last render
+		r.renderingHead = numLinesThisFlush - 1
+	} else {
+		// get the capacity for the skipLines buffer as
+		// the max of the height of this render + the height
+		// of the previous render
+		skipCap := r.linesRendered
+		if numLinesThisFlush > skipCap {
+			skipCap = numLinesThisFlush
+		}
+
+		// ensure the skiplines buffer can hold the number of lines we want to render
+		r.ensureSkiplinesSize(skipCap)
+
+		// add ignored lines to the skipLines buffer
+		for i, _ := range r.ignoreLines {
+			if i < skipCap {
+				r.skipLines[i] = true
+			}
+		}
+
+		// Populate the skiplines buffer by diffing lines with the previous render
+		for i := 0; i < r.linesRendered; i++ {
+			if (len(newLines) > i && len(r.lastRenderLines) > i) && (newLines[i] == r.lastRenderLines[i]) {
+				// If the number of lines we want to render hasn't increased and
+				// new line is the same as the old line we can skip rendering for
+				// this line as a performance optimization.
+				r.skipLines[i] = true
+			} else if _, shouldIgnore := r.ignoreLines[i]; shouldIgnore {
+				r.skipLines[i] = true
+			}
+		}
+
+		// Paint new lines, starting at the current position of the rendering head
+		i := 0
+		for ; i < numLinesThisFlush; i++ {
+			if skip := r.skipLines[i]; skip {
+				continue
+			}
+			line := newLines[i]
+
+			// Truncate lines wider than the width of the window to avoid
+			// wrapping, which will mess up rendering. If we don't have the
+			// width of the window this will be ignored.
+			//
+			// Note that on Windows we only get the width of the window on
+			// program initialization, so after a resize this won't perform
+			// correctly (signal SIGWINCH is not supported on Windows).
+			if r.width > 0 {
+				line = truncate.String(line, uint(r.width))
+			}
+
+			// move the rendering head to the current line
+			r.moveRenderingHead(i, out)
+			if i < r.linesRendered {
+				// if there was a previous line, clear it
+				out.ClearLine()
+			}
+
+			_, _ = out.WriteString(line)
+			if i < numLinesThisFlush-1 {
+				_, _ = out.WriteString("\r")
+			}
+		}
+		// if we have lines left over from the previous render, continue
+		// downward and clearing lines
+		if i < r.linesRendered {
+			// add missing '\r' from last iteration of above loop
+			_, _ = out.WriteString("\r")
+			for ; i < r.linesRendered; i++ {
+				if skip := r.skipLines[i]; skip {
+					continue
+				}
+				r.moveRenderingHead(i, out)
+				out.ClearLine()
+			}
+
+			// Reset the cursor position so it is within the rendered area
+			// from this render pass
+			r.moveRenderingHead(numLinesThisFlush-1, out)
+		}
 	}
 
+	// Make sure the cursor is at the start of the last line to keep rendering
+	// behavior consistent.
+	if r.altScreenActive {
+		// This case fixes a bug in macOS terminal. In other terminals the
+		// other case seems to do the job regardless of whether or not we're
+		// using the full terminal window.
+		out.MoveCursor(
+			// move cursor position to the position of the rendering head.
+			//
+			// RenderingHead is tracked as an index into the line-list, which is
+			// 0-indexed.
+			//
+			// We add 1 here to transform it into terminal coordinates, which are
+			// 1-indexed
+			r.renderingHead+1, 0)
+	} else {
+		out.CursorBack(r.width)
+	}
+
+	_, _ = r.out.Write(buf.Bytes())
+	// record info on this render for the next flush
+	r.linesRendered = numLinesThisFlush
+	r.lastRenderLines = newLines
+	r.lastRender = bufString
+	r.buf.Reset()
+}
+
+func (r *standardRenderer) ensureSkiplinesSize(skipCap int) {
 	// reset the skipLines buffer to the correct size
 	if len(r.skipLines) < skipCap {
 		if cap(r.skipLines) < skipCap {
@@ -200,108 +328,33 @@ func (r *standardRenderer) flush() {
 		r.skipLines[i] = false
 	}
 
-	// Find all the lines we want to skip
-	var lowestLineToClear = 0
-	if flushQueuedMessages {
-		// if wer'e flushing messages, we need to clear all lines
-		lowestLineToClear = r.linesRendered - 1
-	} else if r.linesRendered > 0 {
-		for i := 0; i < r.linesRendered; i++ {
-			if (len(newLines) > i && len(oldLines) > i) && (newLines[i] == oldLines[i]) {
-				// If the number of lines we want to render hasn't increased and
-				// new line is the same as the old line we can skip rendering for
-				// this line as a performance optimization.
-				r.skipLines[i] = true
-			} else if _, shouldIgnore := r.ignoreLines[i]; shouldIgnore {
-				r.skipLines[i] = true
-			} else {
-				lowestLineToClear = i
+}
+
+func (r *standardRenderer) moveRenderingHead(toLine int, out *termenv.Output) {
+	delta := toLine - r.renderingHead
+	if delta == 0 {
+		return
+	} else if delta == 1 {
+		out.WriteString("\n")
+		r.renderingHead = toLine
+	} else if delta > 0 {
+		if toLine > r.linesRendered {
+			// If we're moving the cursor down past the last line we've
+			// rendered, we need to move the cursor down to the last line we've
+			// rendered and then move it down the remaining lines with '\n'
+			// instead of CursorDown, so we can scroll the terminal
+			out.CursorDown(r.linesRendered - r.renderingHead)
+			for i := r.linesRendered - r.renderingHead; i < delta; i++ {
+				out.WriteString("\n")
 			}
+		} else {
+			out.CursorDown(delta)
 		}
-	}
-	// If we have rendered anyting previously, we need to clear the lines that
-	// were not skipped
-	if r.linesRendered > 0 {
-		// The rendering head is the index of the cursor in the current render.
-		// If we have more lines to render, we need to move the cursor down to
-		// the line we want to replace.
-		if r.renderingHead < lowestLineToClear {
-			out.CursorDown(lowestLineToClear - r.renderingHead)
-		}
-		r.renderingHead = lowestLineToClear
-
-		// iterate backwards, starting from the last rendered line
-		for i := lowestLineToClear; i >= 0; i-- {
-			if !r.skipLines[i] {
-				// jump to this position and clear it
-				if r.renderingHead != i {
-					out.CursorUp(r.renderingHead - i)
-				}
-				out.ClearLine()
-				r.renderingHead = i
-			}
-		}
-	}
-
-	if flushQueuedMessages {
-		// Dump the lines we've queued up for printing
-		for _, line := range r.queuedMessageLines {
-			_, _ = out.WriteString(line)
-			_, _ = out.WriteString("\r\n")
-		}
-		// clear the queued message lines
-		r.queuedMessageLines = r.queuedMessageLines[:0]
-	}
-
-	// Paint new lines, starting at the current position of the rendering head
-	for i := r.renderingHead; i < numLinesThisFlush; i++ {
-		if skip := r.skipLines[i]; !skip {
-			line := newLines[i]
-
-			// Truncate lines wider than the width of the window to avoid
-			// wrapping, which will mess up rendering. If we don't have the
-			// width of the window this will be ignored.
-			//
-			// Note that on Windows we only get the width of the window on
-			// program initialization, so after a resize this won't perform
-			// correctly (signal SIGWINCH is not supported on Windows).
-			if r.width > 0 {
-				line = truncate.String(line, uint(r.width))
-			}
-
-			// move the rendering head down to the current line
-			if r.renderingHead != i {
-				delta := i - r.renderingHead
-				if delta == 1 {
-					out.WriteString("\n")
-				} else {
-					out.CursorDown(delta)
-				}
-				r.renderingHead = i
-			}
-
-			_, _ = out.WriteString(line)
-			if i < numLinesThisFlush-1 {
-				_, _ = out.WriteString("\r")
-			}
-		}
-	}
-	r.linesRendered = numLinesThisFlush
-
-	// Make sure the cursor is at the start of the last line to keep rendering
-	// behavior consistent.
-	if r.altScreenActive {
-		// This case fixes a bug in macOS terminal. In other terminals the
-		// other case seems to do the job regardless of whether or not we're
-		// using the full terminal window.
-		out.MoveCursor(r.linesRendered, 0)
+		r.renderingHead = toLine
 	} else {
-		out.CursorBack(r.width)
+		out.CursorUp(-delta)
+		r.renderingHead = toLine
 	}
-
-	_, _ = r.out.Write(buf.Bytes())
-	r.lastRender = bufString
-	r.buf.Reset()
 }
 
 // write writes to the internal buffer. The buffer will be outputted via the

@@ -180,13 +180,14 @@ func TestFlush(t *testing.T) {
 
 		buffer := bytes.Buffer{}
 		r := standardRenderer{
-			mtx:           &sync.Mutex{},
-			out:           termenv.NewOutput(&buffer),
-			lastRender:    origRender,
-			linesRendered: 4,
-			buf:           *bytes.NewBuffer([]byte(nextRender)),
-			width:         20,
-			renderingHead: 0,
+			mtx:             &sync.Mutex{},
+			out:             termenv.NewOutput(&buffer),
+			lastRender:      origRender,
+			lastRenderLines: strings.Split(origRender, "\n"),
+			linesRendered:   4,
+			buf:             *bytes.NewBuffer([]byte(nextRender)),
+			width:           20,
+			renderingHead:   0,
 		}
 
 		r.flush()
@@ -224,29 +225,27 @@ func TestFlush(t *testing.T) {
 
 		buffer := bytes.Buffer{}
 		r := standardRenderer{
-			mtx:           &sync.Mutex{},
-			out:           termenv.NewOutput(&buffer),
-			lastRender:    origRender,
-			linesRendered: 4,
-			buf:           *bytes.NewBuffer([]byte(nextRender)),
-			width:         20,
-			renderingHead: 0,
+			mtx:             &sync.Mutex{},
+			out:             termenv.NewOutput(&buffer),
+			lastRender:      origRender,
+			lastRenderLines: strings.Split(origRender, "\n"),
+			linesRendered:   4,
+			buf:             *bytes.NewBuffer([]byte(nextRender)),
+			width:           20,
+			renderingHead:   0,
 		}
 
 		r.flush()
 
 		expectedBuffer := &bytes.Buffer{}
 		eO := termenv.NewOutput(expectedBuffer)
-		// Jumping down to line 2
-		eO.CursorDown(2)
-		// Clearing lines 2 and 0 in order
-		eO.ClearLine()
-		eO.CursorUp(2)
+		// Clearing line 0
 		eO.ClearLine()
 		// Writing line 0
 		eO.WriteString("Line One\r")
 		// Jumping down to line 2 and writing line 2
 		eO.CursorDown(2)
+		eO.ClearLine()
 		eO.WriteString("Line Three\r")
 		// reset cursor to back
 		eO.CursorBack(20)
@@ -278,33 +277,29 @@ func TestFlush(t *testing.T) {
 
 		buffer := bytes.Buffer{}
 		r := standardRenderer{
-			mtx:           &sync.Mutex{},
-			out:           termenv.NewOutput(&buffer),
-			lastRender:    origRender,
-			linesRendered: 4,
-			buf:           *bytes.NewBuffer([]byte(nextRender)),
-			width:         20,
-			renderingHead: 0,
+			mtx:             &sync.Mutex{},
+			out:             termenv.NewOutput(&buffer),
+			lastRender:      origRender,
+			lastRenderLines: strings.Split(origRender, "\n"),
+			linesRendered:   4,
+			buf:             *bytes.NewBuffer([]byte(nextRender)),
+			width:           20,
+			renderingHead:   0,
 		}
 
 		r.flush()
 
 		expectedBuffer := &bytes.Buffer{}
 		eO := termenv.NewOutput(expectedBuffer)
-		// Jumping down to line 2
-		eO.CursorDown(2)
-		// Clearing lines 2, 1, 0 in order
+		// Clearing and writing line 0
 		eO.ClearLine()
-		eO.CursorUp(1)
-		eO.ClearLine()
-		eO.CursorUp(1)
-		eO.ClearLine()
-		// Writing line 0
 		eO.WriteString("Line One\r")
 		// Jumping down to line 2 and writing line 2
 		eO.WriteString("\n")
+		eO.ClearLine()
 		eO.WriteString("Line Two\r")
 		eO.WriteString("\n")
+		eO.ClearLine()
 		eO.WriteString("Line Three\r")
 		// reset cursor to back
 		eO.CursorBack(20)
@@ -325,43 +320,45 @@ func TestFlush(t *testing.T) {
 		}
 	})
 
-	t.Run("Only renders changed lines -->> Can render on lines not including the renderingHead", func(t *testing.T) {
+	t.Run("Only renders changed lines -->> Can render as shorter message, on lines not including the renderinghead", func(t *testing.T) {
 		origRender := "Line 1\n" +
 			"Line 2\n" +
-			"Line 3\n"
+			"Line 3\n" +
+			"erase_me"
 
 		nextRender := "Line One\n" +
-			"Line Two\n" +
-			"Line Three\n"
+			"Line 2\n" +
+			"Line Three"
 
 		buffer := bytes.Buffer{}
 		r := standardRenderer{
-			mtx:           &sync.Mutex{},
-			out:           termenv.NewOutput(&buffer),
-			lastRender:    origRender,
-			linesRendered: 4,
-			buf:           *bytes.NewBuffer([]byte(nextRender)),
-			width:         20,
-			renderingHead: 3,
+			mtx:             &sync.Mutex{},
+			out:             termenv.NewOutput(&buffer),
+			lastRender:      origRender,
+			lastRenderLines: strings.Split(origRender, "\n"),
+			linesRendered:   4,
+			buf:             *bytes.NewBuffer([]byte(nextRender)),
+			width:           20,
+			renderingHead:   3,
 		}
 
 		r.flush()
 
 		expectedBuffer := &bytes.Buffer{}
 		eO := termenv.NewOutput(expectedBuffer)
-		// Clearing lines 2, 1, 0 in order
-		eO.ClearLine()
-		eO.CursorUp(1)
-		eO.ClearLine()
-		eO.CursorUp(1)
+		eO.CursorUp(3)
 		eO.ClearLine()
 		// Writing line 0
 		eO.WriteString("Line One\r")
 		// Jumping down to line 2 and writing line 2
-		eO.WriteString("\n")
-		eO.WriteString("Line Two\r")
-		eO.WriteString("\n")
+		eO.CursorDown(2)
+		eO.ClearLine()
 		eO.WriteString("Line Three\r")
+		eO.WriteString("\n")
+		// clear the erase_me line
+		eO.ClearLine()
+		// reset cursor to last rendered line
+		eO.CursorUp(1)
 		// reset cursor to back
 		eO.CursorBack(20)
 
@@ -377,7 +374,50 @@ func TestFlush(t *testing.T) {
 		}
 
 		if r.renderingHead != 2 {
-			t.Errorf("expected renderingHead to be 0, got %d", r.renderingHead)
+			t.Errorf("renderinghead should end on the last rendered line of this render-pass (2), got %d", r.renderingHead)
+		}
+	})
+
+	t.Run("Jump past end of last render", func(t *testing.T) {
+		origRender := "short last render\n"
+		nextRender := "short last render\n" +
+			"\n" +
+			"longer next render"
+
+		buffer := bytes.Buffer{}
+		r := standardRenderer{
+			mtx:             &sync.Mutex{},
+			out:             termenv.NewOutput(&buffer),
+			lastRender:      origRender,
+			lastRenderLines: strings.Split(origRender, "\n"),
+			linesRendered:   1,
+			buf:             *bytes.NewBuffer([]byte(nextRender)),
+			width:           20,
+			renderingHead:   0,
+		}
+
+		r.flush()
+
+		expectedBuffer := &bytes.Buffer{}
+		eO := termenv.NewOutput(expectedBuffer)
+		eO.WriteString("\n")   // skip unchanged line
+		eO.WriteString("\r\n") // write second line
+		eO.WriteString("longer next render")
+		eO.CursorBack(20)
+
+		compareBuffers(t,
+			buffer.Bytes(),
+			expectedBuffer.Bytes(),
+		)
+
+		if r.lastRender != nextRender {
+			t.Errorf("expected lastRender to be:\n%s\ngot:\n%s",
+				nextRender,
+				r.lastRender)
+		}
+
+		if r.renderingHead != 2 {
+			t.Errorf("renderinghead should end on the last rendered line of this render-pass (2), got %d", r.renderingHead)
 		}
 	})
 
@@ -394,13 +434,14 @@ func TestFlush(t *testing.T) {
 
 		buffer := bytes.Buffer{}
 		r := standardRenderer{
-			mtx:           &sync.Mutex{},
-			out:           termenv.NewOutput(&buffer),
-			lastRender:    origRender,
-			linesRendered: 4,
-			buf:           *bytes.NewBuffer([]byte(nextRender)),
-			width:         20,
-			renderingHead: 1,
+			mtx:             &sync.Mutex{},
+			out:             termenv.NewOutput(&buffer),
+			lastRender:      origRender,
+			lastRenderLines: strings.Split(origRender, "\n"),
+			linesRendered:   4,
+			buf:             *bytes.NewBuffer([]byte(nextRender)),
+			width:           20,
+			renderingHead:   1,
 			queuedMessageLines: []string{
 				"Queued Message 1",
 				"Queued Message Two",
@@ -411,29 +452,24 @@ func TestFlush(t *testing.T) {
 
 		expectedBuffer := &bytes.Buffer{}
 		eO := termenv.NewOutput(expectedBuffer)
-		// move down from line 1 to line 3
-		eO.CursorDown(2)
-		// Clearing lines 3, 2, 1, 0 in order
-		eO.ClearLine()
+		// reset cursor position to top of the screen
 		eO.CursorUp(1)
+		// Clearing the entire previous render
 		eO.ClearLine()
-		eO.CursorUp(1)
-		eO.ClearLine()
-		eO.CursorUp(1)
-		eO.ClearLine()
-		// Dumping the message queue
 		eO.WriteString("Queued Message 1")
 		eO.WriteString("\r\n")
+		eO.ClearLine()
 		eO.WriteString("Queued Message Two")
 		eO.WriteString("\r\n")
 		// Writing the full content of the buffer, even though some lines are the same
 		// as they were before
-		eO.WriteString("Line 1\r")
-		eO.WriteString("\n")
-		eO.WriteString("Line 2\r")
-		eO.WriteString("\n")
-		eO.WriteString("Line Three\r")
-		eO.WriteString("\n")
+		eO.ClearLine()
+		eO.WriteString("Line 1\r\n")
+		eO.ClearLine()
+		eO.WriteString("Line 2\r\n")
+		eO.ClearLine()
+		eO.WriteString("Line Three\r\n")
+		eO.ClearLine()
 		eO.WriteString("Line Four")
 		// reset cursor to back
 		eO.CursorBack(20)
