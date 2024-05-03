@@ -36,6 +36,7 @@ type standardRenderer struct {
 	done               chan struct{}
 	lastRender         string
 	lastRenderLines    []string
+	forceRepaint       bool
 	linesRendered      int
 	useANSICompressor  bool
 	once               sync.Once
@@ -157,9 +158,10 @@ func (r *standardRenderer) flush() {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
-	flushQueuedMessages := len(r.queuedMessageLines) > 0 && !r.altScreenActive
+	forceFullFlush := (len(r.queuedMessageLines) > 0 && !r.altScreenActive) || r.forceRepaint
+	r.forceRepaint = false
 	bufString := r.buf.String()
-	if !flushQueuedMessages && (r.buf.Len() == 0 || bufString == r.lastRender) {
+	if !forceFullFlush && (r.buf.Len() == 0 || bufString == r.lastRender) {
 		// Nothing to do
 		return
 	}
@@ -181,7 +183,7 @@ func (r *standardRenderer) flush() {
 	numLinesThisFlush := len(newLines)
 
 	// get capacity for the skipLines buffer
-	if flushQueuedMessages {
+	if forceFullFlush {
 		// reset the cursor to the top
 		if r.renderingHead != 0 {
 			r.moveRenderingHead(0, out)
@@ -197,13 +199,24 @@ func (r *standardRenderer) flush() {
 
 		// paint all lines
 		for i, line := range newLines {
+			// Truncate lines wider than the width of the window to avoid
+			// wrapping, which will mess up rendering. If we don't have the
+			// width of the window this will be ignored.
+			//
+			// Note that on Windows we only get the width of the window on
+			// program initialization, so after a resize this won't perform
+			// correctly (signal SIGWINCH is not supported on Windows).
+			if r.width > 0 {
+				line = truncate.String(line, uint(r.width))
+			}
+
 			out.ClearLine()
 			out.WriteString(line)
 			if i < numLinesThisFlush-1 {
 				_, _ = out.WriteString("\r\n")
 			}
 		}
-		// set renderingHEad to the btotom of the last render
+		// set renderingHead to the bottomg of this render of the last render
 		r.renderingHead = numLinesThisFlush - 1
 	} else {
 		// get the capacity for the skipLines buffer as
@@ -376,7 +389,7 @@ func (r *standardRenderer) write(s string) {
 }
 
 func (r *standardRenderer) repaint() {
-	r.lastRender = ""
+	r.forceRepaint = true
 }
 
 func (r *standardRenderer) clearScreen() {
@@ -385,6 +398,7 @@ func (r *standardRenderer) clearScreen() {
 
 	r.out.ClearScreen()
 	r.out.MoveCursor(1, 1)
+	r.renderingHead = 0
 
 	r.repaint()
 }
@@ -415,6 +429,7 @@ func (r *standardRenderer) enterAltScreen() {
 	// locked.
 	r.out.ClearScreen()
 	r.out.MoveCursor(1, 1)
+	r.renderingHead = 0
 
 	// cmd.exe and other terminals keep separate cursor states for the AltScreen
 	// and the main buffer. We have to explicitly reset the cursor visibility
