@@ -24,5 +24,5 @@ require (
 )
 
 replace (
-	github.com/muesli/reflow => /workspaces/reflow
+	github.com/muesli/reflow => github.com/adjective-object/reflow v0.0.0-20240603175854-170010c71ddc
 )
