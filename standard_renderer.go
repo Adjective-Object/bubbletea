@@ -7,7 +7,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/muesli/ansi/compressor"
 	"github.com/muesli/reflow/truncate"
 	"github.com/muesli/termenv"
@@ -153,6 +155,49 @@ func (r *standardRenderer) listen() {
 	}
 }
 
+func normalizeWidth(b []byte) []byte {
+	i := 0
+	tabCount := 0
+	for i < len(b) {
+		// iterate runewise over the input byte slice w/o allocating
+		c, cw := utf8.DecodeRune(b[i:])
+		if c == '\t' {
+			tabCount++
+		} else if runewidth.IsAmbiguousWidth(c) {
+			// replace ambiguous width runes with an equivalent number of spaces
+			// because wrapped text breaks the terminal cursor
+			for j := 0; j < cw; j++ {
+				b[i+j] = ' '
+			}
+		}
+		i += cw
+	}
+
+	// if the line contains tabs, we need to expand them to spaces
+	const TABWIDTH = 2
+	if tabCount > 0 {
+		newLen := len(b) + tabCount*(TABWIDTH-1)
+		newB := make([]byte, newLen)
+		i = 0
+		j := 0
+		for i < len(b) {
+			if b[i] == '\t' {
+				for k := 0; k < TABWIDTH; k++ {
+					newB[j+k] = ' '
+				}
+				j += TABWIDTH
+			} else {
+				newB[j] = b[i]
+				j++
+			}
+			i++
+		}
+		b = newB
+	}
+
+	return b
+}
+
 // flush renders the buffer.
 func (r *standardRenderer) flush() {
 	r.mtx.Lock()
@@ -160,7 +205,9 @@ func (r *standardRenderer) flush() {
 
 	forceFullFlush := (len(r.queuedMessageLines) > 0 && !r.altScreenActive) || r.forceRepaint
 	r.forceRepaint = false
-	bufString := r.buf.String()
+
+	// clean up the buffer
+	bufString := string(normalizeWidth(r.buf.Bytes()))
 	if !forceFullFlush && (r.buf.Len() == 0 || bufString == r.lastRender) {
 		// Nothing to do
 		return
@@ -170,14 +217,20 @@ func (r *standardRenderer) flush() {
 	buf := &bytes.Buffer{}
 	out := termenv.NewOutput(buf)
 
-	newLines := strings.Split(r.buf.String(), "\n")
+	newLines := strings.Split(bufString, "\n")
+	lastRenderLines := r.lastRenderLines
 
 	// If we know the output's height, we can use it to determine how many
 	// lines we can render. We drop lines from the top of the render buffer if
 	// necessary, as we can't navigate the cursor into the terminal's scrollback
 	// buffer.
 	if r.height > 0 && len(newLines) > r.height {
+		if len(lastRenderLines) > r.height {
+			lastRenderLines = lastRenderLines[len(lastRenderLines)-r.height:]
+		}
 		newLines = newLines[len(newLines)-r.height:]
+		r.resetRenderingHead(out)
+		forceFullFlush = true
 	}
 
 	numLinesThisFlush := len(newLines)
@@ -196,6 +249,13 @@ func (r *standardRenderer) flush() {
 		}
 		// clear the queued message lines
 		r.queuedMessageLines = r.queuedMessageLines[:0]
+
+		// disable text wrap within UI body
+		// see: https://github.com/alacritty/alacritty/issues/282
+		shouldDisableWrap := len(newLines) > 1
+		if shouldDisableWrap {
+			disableLineWrap(out)
+		}
 
 		// paint all lines
 		for i, line := range newLines {
@@ -216,8 +276,23 @@ func (r *standardRenderer) flush() {
 				_, _ = out.WriteString("\r\n")
 			}
 		}
-		// set renderingHead to the bottomg of this render of the last render
+		// set renderingHead to the bottom of this render
 		r.renderingHead = numLinesThisFlush - 1
+
+		// clear the rest of the previous render if it was longer than this one
+		if r.linesRendered > numLinesThisFlush {
+			for i := numLinesThisFlush; i < r.linesRendered; i++ {
+				r.moveRenderingHead(i, out)
+				out.ClearLine()
+			}
+		}
+		// return the rendering head to the bottom of the current render.
+		r.moveRenderingHead(numLinesThisFlush-1, out)
+
+		// re-enable text wrap within UI body
+		if shouldDisableWrap {
+			enableLineWrap(out)
+		}
 	} else {
 		// get the capacity for the skipLines buffer as
 		// the max of the height of this render + the height
@@ -231,7 +306,7 @@ func (r *standardRenderer) flush() {
 		r.ensureSkiplinesSize(skipCap)
 
 		// add ignored lines to the skipLines buffer
-		for i, _ := range r.ignoreLines {
+		for i := range r.ignoreLines {
 			if i < skipCap {
 				r.skipLines[i] = true
 			}
@@ -239,7 +314,7 @@ func (r *standardRenderer) flush() {
 
 		// Populate the skiplines buffer by diffing lines with the previous render
 		for i := 0; i < r.linesRendered; i++ {
-			if (len(newLines) > i && len(r.lastRenderLines) > i) && (newLines[i] == r.lastRenderLines[i]) {
+			if (len(newLines) > i && len(lastRenderLines) > i) && (newLines[i] == lastRenderLines[i]) {
 				// If the number of lines we want to render hasn't increased and
 				// new line is the same as the old line we can skip rendering for
 				// this line as a performance optimization.
@@ -249,12 +324,19 @@ func (r *standardRenderer) flush() {
 			}
 		}
 
+		isLineWrapDisabled := false
+
 		// Paint new lines, starting at the current position of the rendering head
 		i := 0
 		for ; i < numLinesThisFlush; i++ {
 			if skip := r.skipLines[i]; skip {
 				continue
 			}
+			if !isLineWrapDisabled {
+				isLineWrapDisabled = true
+				disableLineWrap(out)
+			}
+
 			line := newLines[i]
 
 			// Truncate lines wider than the width of the window to avoid
@@ -296,6 +378,11 @@ func (r *standardRenderer) flush() {
 			// Reset the cursor position so it is within the rendered area
 			// from this render pass
 			r.moveRenderingHead(numLinesThisFlush-1, out)
+		}
+
+		// if we disabled line wrap, re-enable it
+		if isLineWrapDisabled {
+			enableLineWrap(out)
 		}
 	}
 
@@ -340,7 +427,14 @@ func (r *standardRenderer) ensureSkiplinesSize(skipCap int) {
 	for i := 0; i < len(r.skipLines); i++ {
 		r.skipLines[i] = false
 	}
+}
 
+func disableLineWrap(out *termenv.Output) {
+	out.WriteString("\x1b[7l")
+}
+
+func enableLineWrap(out *termenv.Output) {
+	out.WriteString("\x1b[7h")
 }
 
 func (r *standardRenderer) moveRenderingHead(toLine int, out *termenv.Output) {
@@ -368,6 +462,11 @@ func (r *standardRenderer) moveRenderingHead(toLine int, out *termenv.Output) {
 		out.CursorUp(-delta)
 		r.renderingHead = toLine
 	}
+}
+
+func (r *standardRenderer) resetRenderingHead(out *termenv.Output) {
+	r.renderingHead = 0
+	out.MoveCursor(1, 1)
 }
 
 // write writes to the internal buffer. The buffer will be outputted via the
